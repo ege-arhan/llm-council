@@ -74,7 +74,7 @@ class ComboTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final["response"], "Final synthesis")
         self.assertEqual(metadata["configured_models"], roster)
 
-    async def test_failed_member_is_reported_and_not_asked_to_review(self):
+    async def test_missing_member_is_retried_and_incomplete_council_fails_closed(self):
         roster = ["ag/gemini", "nvidia/deepseek"]
         calls = []
 
@@ -84,20 +84,37 @@ class ComboTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(council, "resolve_council_models", AsyncMock(return_value=roster)), \
              patch.object(council, "query_models_parallel", side_effect=parallel), \
+             patch("asyncio.sleep", new_callable=AsyncMock), \
              patch.object(council, "query_model", AsyncMock(return_value={"content": "synthesis"})):
-            _, _, final, metadata = await council.run_full_council("Question")
-        self.assertEqual(calls, [roster])
-        self.assertEqual(metadata["stage1_failed_models"], ["nvidia/deepseek"])
-        self.assertTrue(final["degraded"])
+            with self.assertRaisesRegex(RuntimeError, "nvidia/deepseek"):
+                await council.run_full_council("Question")
+        self.assertEqual(calls, [roster, ["nvidia/deepseek"]])
 
-    async def test_failed_chairman_uses_another_successful_member(self):
+    async def test_missing_member_recovery_preserves_other_responses(self):
+        roster = ["ag/gemini", "gh/claude"]
+        calls = []
+
+        async def parallel(member_models, messages, **kwargs):
+            calls.append(list(member_models))
+            return {model: {"content": "answer"} if model == "ag/gemini" or len(calls) == 2 else None
+                    for model in member_models}
+
+        with patch.object(council, "query_models_parallel", side_effect=parallel), \
+             patch("asyncio.sleep", new_callable=AsyncMock):
+            answers = await council.stage1_collect_responses("Question", roster)
+        self.assertEqual(calls, [roster, ["gh/claude"]])
+        self.assertEqual([item["model"] for item in answers], roster)
+
+    async def test_failed_chairman_is_not_replaced_by_an_unapproved_judge(self):
         answers = [{"model": "ag/gemini", "response": "A"}, {"model": "gh/claude", "response": "B"}]
+        attempts = []
         async def query(model, messages, **kwargs):
-            return None if model == "ag/gemini" else {"content": "Synthesis from Claude"}
+            attempts.append(model)
+            return None
         with patch.object(council, "query_model", side_effect=query):
-            final = await council.stage3_synthesize_final("Question", answers, [], "ag/gemini")
-        self.assertEqual(final["model"], "gh/claude")
-        self.assertTrue(final["degraded"])
+            with self.assertRaisesRegex(RuntimeError, "hakemi"):
+                await council.stage3_synthesize_final("Question", answers, [], "ag/gemini")
+        self.assertEqual(attempts, ["ag/gemini", "ag/gemini"])
 
     def test_follow_up_has_bounded_prior_context(self):
         previous = [
@@ -137,6 +154,18 @@ class ComboTests(unittest.IsolatedAsyncioTestCase):
             reviews, _, attempted = await council.stage2_collect_rankings("Question", answers)
         self.assertEqual([item["model"] for item in reviews], ["ag/strong", "ag/backup"])
         self.assertEqual(attempted, ["ag/strong", "cx/strong", "ag/backup"])
+
+    async def test_one_review_is_not_presented_as_a_full_peer_review(self):
+        answers = [{"model": "ag/strong", "response": "A"}, {"model": "cx/strong", "response": "B"}]
+
+        async def partial(member_models, messages, **kwargs):
+            return {member_models[0]: {"content": "FINAL RANKING:\n1. Response A\n2. Response B"},
+                    member_models[1]: None}
+
+        with patch.object(council, "COUNCIL_MAX_REVIEWERS", 2), \
+             patch.object(council, "query_models_parallel", side_effect=partial):
+            with self.assertRaisesRegex(RuntimeError, "1/2"):
+                await council.stage2_collect_rankings("Question", answers)
 
     def test_usage_summary_counts_only_reported_tokens(self):
         summary = council.summarize_usage(

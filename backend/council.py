@@ -83,8 +83,20 @@ async def stage1_collect_responses(user_query: str, models: List[str] | None = N
     """
     messages = [{"role": "system", "content": "Answer substantively but concisely. State material assumptions and uncertainty. Do not invent sources or add filler."}, {"role": "user", "content": user_query}]
 
-    # Query all models in parallel
-    responses = await query_models_parallel(models or await resolve_council_models(), messages, max_tokens=900)
+    members = models or await resolve_council_models()
+    responses = await query_models_parallel(members, messages, max_tokens=900)
+    missing = [model for model in members if responses.get(model) is None]
+    if missing:
+        # Retry only missing opinions; do not pay again for successful ones.
+        import asyncio
+        await asyncio.sleep(2)
+        responses.update(await query_models_parallel(missing, messages, max_tokens=1600))
+    missing = [model for model in members if responses.get(model) is None]
+    if missing:
+        raise RuntimeError(
+            "Council tamamlanamadı: " + ", ".join(missing)
+            + " yanıt vermedi. Eksik üyelerle hakem kararı üretilmedi; daha sonra tekrar deneyin."
+        )
 
     # Format results
     stage1_results = []
@@ -189,6 +201,12 @@ Now provide your evaluation and ranking:"""
                 "usage": response.get("usage"),
             })
 
+    if len(stage2_results) < target:
+        raise RuntimeError(
+            f"Council değerlendirmesi tamamlanamadı: {len(stage2_results)}/{target} akran görüşü alındı. "
+            "Eksik değerlendirmeyle hakem kararı üretilmedi."
+        )
+
     return stage2_results, label_to_model, list(responses)
 
 
@@ -240,17 +258,13 @@ Provide a clear, well-reasoned final answer that represents the council's collec
     messages = [{"role": "user", "content": chairman_prompt}]
 
     # Query the chairman model
-    candidates = list(dict.fromkeys([chairman_model or CHAIRMAN_MODEL or stage1_results[0]["model"]]
-                                    + [item["model"] for item in stage1_results]))[:3]
-    for model in candidates:
-        response = await query_model(model, messages, max_tokens=2200)
+    model = chairman_model or CHAIRMAN_MODEL or stage1_results[0]["model"]
+    for attempt in range(2):
+        response = await query_model(model, messages, max_tokens=2200 if attempt == 0 else 2600)
         if response and response.get("content"):
-            return {"model": model, "response": response["content"], "degraded": model != candidates[0],
+            return {"model": model, "response": response["content"], "degraded": False,
                     "usage": response.get("usage")}
-
-    # Preserve a real answer when every synthesis attempt fails; label it clearly.
-    return {"model": stage1_results[0]["model"], "response": stage1_results[0]["response"],
-            "degraded": True, "reason": "Sentez başarısız; ilk bağımsız görüş gösteriliyor."}
+    raise RuntimeError(f"Council hakemi {model} iki denemede yanıt vermedi; üye görüşleri nihai karar olarak sunulmadı.")
 
 
 def parse_ranking_from_text(ranking_text: str) -> List[str]:

@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 async def query_model(
     model: str,
     messages: List[Dict[str, str]],
-    timeout: float = 120.0,
+    timeout: float = 150.0,
     max_tokens: int = 900,
 ) -> Optional[Dict[str, Any]]:
     """
@@ -84,8 +84,15 @@ async def query_models_parallel(
     """
     import asyncio
 
-    # Create tasks for all models
-    tasks = [query_model(model, messages, max_tokens=max_tokens) for model in models]
+    # 9Router multiplexes provider requests. Bound in-flight calls so a large
+    # council cannot exhaust the gateway and time out every member together.
+    semaphore = asyncio.Semaphore(3)
+
+    async def limited(model):
+        async with semaphore:
+            return await query_model(model, messages, max_tokens=max_tokens)
+
+    tasks = [limited(model) for model in models]
 
     # Wait for all to complete
     responses = await asyncio.gather(*tasks)
