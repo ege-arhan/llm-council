@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from backend import council, models, storage
+from backend import council, models, openrouter, storage
 from backend import main
 
 
@@ -137,6 +137,26 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(record["messages"][0]["metadata"]["configured_models"], ["a/b"])
             self.assertEqual(Path(storage.get_conversation_path(identifier)).stat().st_mode & 0o777, 0o600)
             self.assertIsNone(storage.get_conversation("../../other"))
+
+
+class ModelClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_json_mode_and_one_adaptive_retry_for_empty_reasoning_answer(self):
+        budgets = []
+        original_client = httpx.AsyncClient
+        def make_client(*args, **kwargs):
+            def reply(request):
+                payload = __import__("json").loads(request.content)
+                budgets.append(payload["max_tokens"])
+                self.assertIs(payload["stream"], False)
+                content = "" if len(budgets) == 1 else "Final answer"
+                return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+            return original_client(transport=httpx.MockTransport(reply))
+        with patch.object(openrouter, "LLM_API_KEY", "test"), \
+             patch.object(openrouter, "LLM_API_URL", "http://local/chat/completions"), \
+             patch.object(openrouter.httpx, "AsyncClient", side_effect=make_client):
+            answer = await openrouter.query_model("ag/example", [{"role": "user", "content": "Question"}], max_tokens=100)
+        self.assertEqual(budgets, [100, 200])
+        self.assertEqual(answer["content"], "Final answer")
 
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):

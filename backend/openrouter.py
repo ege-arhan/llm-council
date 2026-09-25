@@ -54,12 +54,16 @@ async def query_model(
                 if isinstance(content, list):
                     content = "\n".join(part.get("text", "") for part in content if isinstance(part, dict))
                 if not isinstance(content, str) or not content.strip():
-                    logger.warning("Model %s returned empty content", model)
+                    if attempt == 0:
+                        payload["max_tokens"] = min(max_tokens * 2, 2600)
+                        continue
+                    logger.warning("Model %s returned empty content after one larger-budget retry", model)
                     return None
                 return {"content": content.strip(), "reasoning_details": message.get("reasoning_details"),
                         "usage": data.get("usage")}
     except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
-        logger.warning("Model %s failed: %s", model, type(exc).__name__)
+        status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+        logger.warning("Model %s failed: %s%s", model, type(exc).__name__, f" HTTP {status}" if status else "")
     return None
 
 
