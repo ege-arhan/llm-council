@@ -172,10 +172,11 @@ function App() {
       });
     } catch (error) {
       console.error('Failed to send message:', error);
-      // Remove optimistic messages on error
       setCurrentConversation((prev) => ({
         ...prev,
-        messages: prev.messages.slice(0, -2),
+        messages: prev.messages.map((message, index) => index === prev.messages.length - 1 && message.role === 'assistant'
+          ? { ...message, loading: {}, error: error.message || 'Council işlemi başarısız oldu.' }
+          : message),
       }));
       setIsLoading(false);
     }

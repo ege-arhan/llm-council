@@ -13,6 +13,9 @@ export default function Stage3({ finalResponse }) {
         <div className="chairman-label">
           Chairman: {finalResponse.model.split('/')[1] || finalResponse.model}
         </div>
+        {finalResponse.degraded && (
+          <p role="status">{finalResponse.reason || 'Başkan modeli yanıt veremedi; başka bir üye sentezledi.'}</p>
+        )}
         <div className="final-text markdown-content">
           <ReactMarkdown>{finalResponse.response}</ReactMarkdown>
         </div>

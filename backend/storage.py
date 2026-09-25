@@ -2,7 +2,9 @@
 
 import json
 import os
-from datetime import datetime
+import tempfile
+import uuid
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from .config import DATA_DIR
@@ -10,12 +12,19 @@ from .config import DATA_DIR
 
 def ensure_data_dir():
     """Ensure the data directory exists."""
-    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+    Path(DATA_DIR).mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(DATA_DIR, 0o700)
 
 
 def get_conversation_path(conversation_id: str) -> str:
     """Get the file path for a conversation."""
-    return os.path.join(DATA_DIR, f"{conversation_id}.json")
+    try:
+        canonical = str(uuid.UUID(conversation_id))
+    except (ValueError, AttributeError) as exc:
+        raise ValueError("Invalid conversation ID") from exc
+    if canonical != conversation_id:
+        raise ValueError("Invalid conversation ID")
+    return os.path.join(DATA_DIR, f"{canonical}.json")
 
 
 def create_conversation(conversation_id: str) -> Dict[str, Any]:
@@ -32,15 +41,12 @@ def create_conversation(conversation_id: str) -> Dict[str, Any]:
 
     conversation = {
         "id": conversation_id,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "title": "New Conversation",
         "messages": []
     }
 
-    # Save to file
-    path = get_conversation_path(conversation_id)
-    with open(path, 'w') as f:
-        json.dump(conversation, f, indent=2)
+    save_conversation(conversation)
 
     return conversation
 
@@ -55,7 +61,10 @@ def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
     Returns:
         Conversation dict or None if not found
     """
-    path = get_conversation_path(conversation_id)
+    try:
+        path = get_conversation_path(conversation_id)
+    except ValueError:
+        return None
 
     if not os.path.exists(path):
         return None
@@ -74,8 +83,17 @@ def save_conversation(conversation: Dict[str, Any]):
     ensure_data_dir()
 
     path = get_conversation_path(conversation['id'])
-    with open(path, 'w') as f:
-        json.dump(conversation, f, indent=2)
+    fd, temp_path = tempfile.mkstemp(prefix=".conversation-", dir=DATA_DIR)
+    try:
+        with os.fdopen(fd, 'w') as file:
+            json.dump(conversation, file, indent=2)
+            file.flush()
+            os.fsync(file.fileno())
+        os.chmod(temp_path, 0o600)
+        os.replace(temp_path, path)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 
 def list_conversations() -> List[Dict[str, Any]]:
@@ -90,6 +108,10 @@ def list_conversations() -> List[Dict[str, Any]]:
     conversations = []
     for filename in os.listdir(DATA_DIR):
         if filename.endswith('.json'):
+            try:
+                get_conversation_path(filename[:-5])
+            except ValueError:
+                continue
             path = os.path.join(DATA_DIR, filename)
             with open(path, 'r') as f:
                 data = json.load(f)
@@ -131,7 +153,8 @@ def add_assistant_message(
     conversation_id: str,
     stage1: List[Dict[str, Any]],
     stage2: List[Dict[str, Any]],
-    stage3: Dict[str, Any]
+    stage3: Dict[str, Any],
+    metadata: Dict[str, Any] | None = None,
 ):
     """
     Add an assistant message with all 3 stages to a conversation.
@@ -150,7 +173,8 @@ def add_assistant_message(
         "role": "assistant",
         "stage1": stage1,
         "stage2": stage2,
-        "stage3": stage3
+        "stage3": stage3,
+        "metadata": metadata or {},
     })
 
     save_conversation(conversation)

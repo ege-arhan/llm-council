@@ -12,14 +12,26 @@ export default function ChatInterface({
 }) {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef(null);
+  const messagesRef = useRef(null);
+  const stayAtBottomRef = useRef(true);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   useEffect(() => {
-    scrollToBottom();
+    if (stayAtBottomRef.current) scrollToBottom();
   }, [conversation]);
+
+  useEffect(() => {
+    stayAtBottomRef.current = true;
+    scrollToBottom();
+  }, [conversation?.id]);
+
+  const handleScroll = () => {
+    const element = messagesRef.current;
+    if (element) stayAtBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+  };
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -50,7 +62,7 @@ export default function ChatInterface({
 
   return (
     <div className="chat-interface">
-      <div className="messages-container">
+      <div className="messages-container" ref={messagesRef} onScroll={handleScroll}>
         {conversation.messages.length === 0 ? (
           <div className="empty-state">
             <h2>Start a conversation</h2>
@@ -104,6 +116,7 @@ export default function ChatInterface({
                     </div>
                   )}
                   {msg.stage3 && <Stage3 finalResponse={msg.stage3} />}
+                  {msg.error && <p role="alert">{msg.error}</p>}
                 </div>
               )}
             </div>

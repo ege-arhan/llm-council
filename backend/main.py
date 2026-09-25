@@ -3,14 +3,16 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Dict, Any
 import uuid
 import json
 import asyncio
 
 from . import storage
-from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
+from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings, contextualize_query, mark_partial_council
+from .config import CHAIRMAN_MODEL
+from .models import resolve_council_models
 
 app = FastAPI(title="LLM Council API")
 
@@ -31,7 +33,7 @@ class CreateConversationRequest(BaseModel):
 
 class SendMessageRequest(BaseModel):
     """Request to send a message in a conversation."""
-    content: str
+    content: str = Field(min_length=1, max_length=20000)
 
 
 class ConversationMetadata(BaseModel):
@@ -54,6 +56,26 @@ class Conversation(BaseModel):
 async def root():
     """Health check endpoint."""
     return {"status": "ok", "service": "LLM Council API"}
+
+
+@app.get("/api/council/models")
+async def council_models():
+    """Show the live council roster without exposing 9Router credentials."""
+    try:
+        models = await resolve_council_models()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"models": models, "chairman": CHAIRMAN_MODEL or models[0]}
+
+
+@app.post("/api/council/ask")
+async def council_ask(request: SendMessageRequest):
+    """Run the full three-stage council for a local agent without creating a chat."""
+    try:
+        stage1, stage2, stage3, metadata = await run_full_council(request.content)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"stage1": stage1, "stage2": stage2, "stage3": stage3, "metadata": metadata}
 
 
 @app.get("/api/conversations", response_model=List[ConversationMetadata])
@@ -102,16 +124,18 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
         storage.update_conversation_title(conversation_id, title)
 
     # Run the 3-stage council process
-    stage1_results, stage2_results, stage3_result, metadata = await run_full_council(
-        request.content
-    )
+    try:
+        stage1_results, stage2_results, stage3_result, metadata = await run_full_council(contextualize_query(conversation["messages"], request.content))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     # Add assistant message with all stages
     storage.add_assistant_message(
         conversation_id,
         stage1_results,
         stage2_results,
-        stage3_result
+        stage3_result,
+        metadata,
     )
 
     # Return the complete response with metadata
@@ -134,8 +158,14 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    try:
+        models = await resolve_council_models()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     # Check if this is the first message
     is_first_message = len(conversation["messages"]) == 0
+    council_question = contextualize_query(conversation["messages"], request.content)
 
     async def event_generator():
         try:
@@ -149,18 +179,21 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
 
             # Stage 1: Collect responses
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-            stage1_results = await stage1_collect_responses(request.content)
+            stage1_results = await stage1_collect_responses(council_question, models)
+            if not stage1_results:
+                raise RuntimeError("Tüm Council modelleri başarısız oldu; yanıt üretilmedi.")
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
             # Stage 2: Collect rankings
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
-            stage2_results, label_to_model = await stage2_collect_rankings(request.content, stage1_results)
+            stage2_results, label_to_model = await stage2_collect_rankings(council_question, stage1_results)
             aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
             yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
 
             # Stage 3: Synthesize final answer
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
-            stage3_result = await stage3_synthesize_final(request.content, stage1_results, stage2_results)
+            stage3_result = await stage3_synthesize_final(council_question, stage1_results, stage2_results, CHAIRMAN_MODEL or models[0])
+            mark_partial_council(stage3_result, len(models), len(stage1_results), len(stage2_results))
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
             # Wait for title generation if it was started
@@ -174,7 +207,12 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 conversation_id,
                 stage1_results,
                 stage2_results,
-                stage3_result
+                stage3_result,
+                {"configured_models": models,
+                 "stage1_failed_models": [model for model in models if model not in {item["model"] for item in stage1_results}],
+                 "stage2_failed_models": [item["model"] for item in stage1_results if item["model"] not in {rank["model"] for rank in stage2_results}],
+                 "label_to_model": label_to_model,
+                 "aggregate_rankings": aggregate_rankings},
             )
 
             # Send completion event
@@ -182,7 +220,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
 
         except Exception as e:
             # Send error event
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e) if isinstance(e, RuntimeError) else 'Council işlemi başarısız oldu.'})}\n\n"
 
     return StreamingResponse(
         event_generator(),
@@ -196,4 +234,4 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="127.0.0.1", port=8001)

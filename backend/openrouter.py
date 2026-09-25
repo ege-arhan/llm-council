@@ -1,8 +1,12 @@
-"""OpenRouter API client for making LLM requests."""
+"""OpenAI-compatible client for 9Router and OpenRouter."""
 
+import asyncio
+import logging
 import httpx
 from typing import List, Dict, Any, Optional
-from .config import OPENROUTER_API_KEY, OPENROUTER_API_URL
+from .config import LLM_API_KEY, LLM_API_URL
+
+logger = logging.getLogger(__name__)
 
 
 async def query_model(
@@ -21,8 +25,10 @@ async def query_model(
     Returns:
         Response dict with 'content' and optional 'reasoning_details', or None if failed
     """
+    if not LLM_API_KEY:
+        raise RuntimeError("LLM_API_KEY veya OPENROUTER_API_KEY ayarlanmalı.")
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {LLM_API_KEY}",
         "Content-Type": "application/json",
     }
 
@@ -33,24 +39,25 @@ async def query_model(
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                OPENROUTER_API_URL,
-                headers=headers,
-                json=payload
-            )
-            response.raise_for_status()
-
-            data = response.json()
-            message = data['choices'][0]['message']
-
-            return {
-                'content': message.get('content'),
-                'reasoning_details': message.get('reasoning_details')
-            }
-
-    except Exception as e:
-        print(f"Error querying model {model}: {e}")
-        return None
+            for attempt in range(2):
+                response = await client.post(LLM_API_URL, headers=headers, json=payload)
+                if response.status_code in {429, 500, 502, 503, 504} and attempt == 0:
+                    await asyncio.sleep(1)
+                    continue
+                response.raise_for_status()
+                data = response.json()
+                message = data["choices"][0]["message"]
+                content = message.get("content")
+                if isinstance(content, list):
+                    content = "\n".join(part.get("text", "") for part in content if isinstance(part, dict))
+                if not isinstance(content, str) or not content.strip():
+                    logger.warning("Model %s returned empty content", model)
+                    return None
+                return {"content": content.strip(), "reasoning_details": message.get("reasoning_details"),
+                        "usage": data.get("usage")}
+    except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
+        logger.warning("Model %s failed: %s", model, type(exc).__name__)
+    return None
 
 
 async def query_models_parallel(

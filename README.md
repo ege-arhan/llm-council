@@ -1,5 +1,23 @@
 # LLM Council
 
+## Ege's 9Router edition
+
+This fork keeps the original three-stage council and adds a 9Router mode for daily use. Set `COUNCIL_COMBO=llm-council` and the backend reads that combo's current members from 9Router before **every** run. It calls each member by its own model ID for independent answers and peer reviews; it never sends the whole council as one `llm-council` completion. A chairman then synthesizes the result. An unavailable member is listed in the run metadata, and a failed chairman produces an explicitly marked degraded answer.
+
+```sh
+cp .env.example .env
+# Fill LLM_API_KEY with a 9Router key; keep .env private.
+uv sync --frozen
+cd frontend && npm ci && cd ..
+./start.sh
+```
+
+The web app runs on `http://localhost:5173`; the API binds to `127.0.0.1:8001`. `GET /api/council/models` shows the live member list. `POST /api/council/ask` accepts `{"content":"question"}` and returns the three stages without creating a chat, so a local personal agent such as AI-Ege can call the full council. Conversation files remain in ignored `data/conversations/` with private file permissions. The API is intended for the local machine or an authenticated private tunnel; do not expose it directly to the public internet.
+
+The roster comes from 9Router's local `GET /api/combos` management endpoint. If that endpoint is unavailable, the combo is missing, or fewer than two members are enabled, the run stops with a clear error. `COUNCIL_CHAIRMAN_MODEL` optionally chooses the judge; when blank, the first combo member is used. To keep using the original OpenRouter mode, leave `COUNCIL_COMBO` unset and configure `OPENROUTER_API_KEY` and optional `COUNCIL_MODELS`.
+
+For continued development, see [AGENTS.md](AGENTS.md) and [ROADMAP.md](ROADMAP.md). CI verifies backend tests, frontend tests, lint, build, and dependency audit without live API keys.
+
 ![llmcouncil](header.jpg)
 
 The idea of this repo is that instead of asking a question to your favorite LLM provider (e.g. OpenAI GPT 5.1, Google Gemini 3.0 Pro, Anthropic Claude Sonnet 4.5, xAI Grok 4, eg.c), you can group them into your "LLM Council". This repo is a simple, local web app that essentially looks like ChatGPT except it uses OpenRouter to send your query to multiple LLMs, it then asks them to review and rank each other's work, and finally a Chairman LLM produces the final response.
