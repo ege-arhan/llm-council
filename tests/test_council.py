@@ -120,6 +120,12 @@ class ComboTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(council.select_reviewers(answers),
                          ["ag/one", "cx/one", "gh/one", "oc/one", "ocg/one", "nvidia/one"])
 
+    def test_preferred_reviewers_are_selected_when_available(self):
+        answers = [{"model": model, "response": "x"} for model in ["ag/fast", "ag/strong", "cx/strong", "ocg/strong", "nvidia/strong"]]
+        with patch.object(council, "COUNCIL_MAX_REVIEWERS", 4), \
+             patch.object(council, "COUNCIL_REVIEWER_PRIORITY", ["ag/strong", "cx/strong", "ocg/strong", "nvidia/strong"]):
+            self.assertEqual(council.select_reviewers(answers), ["ag/strong", "cx/strong", "ocg/strong", "nvidia/strong"])
+
 
 class StorageTests(unittest.TestCase):
     def test_private_atomic_storage_and_path_validation(self):

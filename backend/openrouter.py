@@ -37,6 +37,7 @@ async def query_model(
         "model": model,
         "messages": messages,
         "max_tokens": max_tokens,
+        "stream": False,
     }
 
     try:

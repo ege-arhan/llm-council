@@ -23,7 +23,8 @@ def main() -> None:
         "COUNCIL_COMBO": "llm-council",
         "COUNCIL_CHAIRMAN_MODEL": "cx/gpt-6-astra",
         "COUNCIL_EXCLUDE_PATTERNS": "contributor",
-        "COUNCIL_MAX_REVIEWERS": "6",
+        "COUNCIL_MAX_REVIEWERS": "4",
+        "COUNCIL_REVIEWER_PRIORITY": "ag/claude-opus-4-6-thinking,cx/gpt-5.6-sol,ocg/deepseek-v4-pro,nvidia/nemotron-3-ultra-550b-a55b",
         "COUNCIL_DATA_DIR": str(Path.home() / ".local/share/ai-ege/llm-council/conversations"),
     })
     os.execvpe(sys.executable, [sys.executable, "-m", "backend.main"], env)

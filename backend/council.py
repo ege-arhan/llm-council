@@ -2,7 +2,7 @@
 
 from typing import List, Dict, Any, Tuple
 from .openrouter import query_models_parallel, query_model
-from .config import CHAIRMAN_MODEL, COUNCIL_MAX_REVIEWERS
+from .config import CHAIRMAN_MODEL, COUNCIL_MAX_REVIEWERS, COUNCIL_REVIEWER_PRIORITY
 from .models import resolve_council_models
 
 
@@ -39,6 +39,13 @@ def select_reviewers(stage1_results: List[Dict[str, Any]]) -> List[str]:
     """Review with a bounded, provider-diverse panel after every member answers."""
     selected = []
     families = set()
+    available = {item["model"] for item in stage1_results}
+    for model in COUNCIL_REVIEWER_PRIORITY:
+        if model in available and model not in selected:
+            selected.append(model)
+            families.add(model.split("/", 1)[0])
+            if len(selected) >= COUNCIL_MAX_REVIEWERS:
+                return selected
     for item in stage1_results:
         model = item["model"]
         family = model.split("/", 1)[0]
