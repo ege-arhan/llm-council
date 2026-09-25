@@ -2,7 +2,7 @@
 
 from typing import List, Dict, Any, Tuple
 from .openrouter import query_models_parallel, query_model
-from .config import CHAIRMAN_MODEL
+from .config import CHAIRMAN_MODEL, COUNCIL_MAX_REVIEWERS
 from .models import resolve_council_models
 
 
@@ -19,7 +19,7 @@ def contextualize_query(messages: List[Dict[str, Any]], question: str) -> str:
 
 
 def mark_partial_council(stage3: Dict[str, Any], configured_count: int, answers_count: int, reviews_count: int) -> Dict[str, Any]:
-    if answers_count < configured_count or (answers_count >= 2 and reviews_count < answers_count):
+    if answers_count < configured_count or (answers_count >= 2 and reviews_count < min(answers_count, COUNCIL_MAX_REVIEWERS)):
         stage3["degraded"] = True
         stage3.setdefault("reason", "Bazı Council üyeleri yanıt veya değerlendirme veremedi; sonuç kısmi katılımla üretildi.")
     return stage3
@@ -35,6 +35,27 @@ def response_label(index: int) -> str:
         index -= 1
 
 
+def select_reviewers(stage1_results: List[Dict[str, Any]]) -> List[str]:
+    """Review with a bounded, provider-diverse panel after every member answers."""
+    selected = []
+    families = set()
+    for item in stage1_results:
+        model = item["model"]
+        family = model.split("/", 1)[0]
+        if family not in families:
+            selected.append(model)
+            families.add(family)
+            if len(selected) >= COUNCIL_MAX_REVIEWERS:
+                return selected
+    for item in stage1_results:
+        model = item["model"]
+        if model not in selected:
+            selected.append(model)
+            if len(selected) >= COUNCIL_MAX_REVIEWERS:
+                break
+    return selected
+
+
 async def stage1_collect_responses(user_query: str, models: List[str] | None = None) -> List[Dict[str, Any]]:
     """
     Stage 1: Collect individual responses from all council models.
@@ -45,10 +66,10 @@ async def stage1_collect_responses(user_query: str, models: List[str] | None = N
     Returns:
         List of dicts with 'model' and 'response' keys
     """
-    messages = [{"role": "user", "content": user_query}]
+    messages = [{"role": "system", "content": "Answer substantively but concisely. State material assumptions and uncertainty. Do not invent sources or add filler."}, {"role": "user", "content": user_query}]
 
     # Query all models in parallel
-    responses = await query_models_parallel(models or await resolve_council_models(), messages)
+    responses = await query_models_parallel(models or await resolve_council_models(), messages, max_tokens=900)
 
     # Format results
     stage1_results = []
@@ -90,7 +111,7 @@ async def stage2_collect_rankings(
 
     # Build the ranking prompt
     responses_text = "\n\n".join([
-        f"Response {label}:\n{result['response']}"
+        f"Response {label}:\n{result['response'][:1600]}"
         for label, result in zip(labels, stage1_results)
     ])
 
@@ -103,8 +124,8 @@ Here are the responses from different models (anonymized):
 {responses_text}
 
 Your task:
-1. First, evaluate each response individually. For each response, explain what it does well and what it does poorly.
-2. Then, at the very end of your response, provide a final ranking.
+1. Identify factual errors and material disagreements. Briefly explain the strongest and weakest responses.
+2. Then, at the very end of your response, provide a final ranking of ALL responses.
 
 IMPORTANT: Your final ranking MUST be formatted EXACTLY as follows:
 - Start with the line "FINAL RANKING:" (all caps, with colon)
@@ -127,9 +148,8 @@ Now provide your evaluation and ranking:"""
 
     messages = [{"role": "user", "content": ranking_prompt}]
 
-    # Get rankings from all council models in parallel
-    # A model that failed to answer the original question cannot fairly review it.
-    responses = await query_models_parallel([item["model"] for item in stage1_results], messages)
+    # The full roster answers independently; a bounded, diverse subset reviews.
+    responses = await query_models_parallel(select_reviewers(stage1_results), messages, max_tokens=650)
 
     # Format results
     stage2_results = []
@@ -165,12 +185,12 @@ async def stage3_synthesize_final(
     """
     # Build comprehensive context for chairman
     stage1_text = "\n\n".join([
-        f"Model: {result['model']}\nResponse: {result['response']}"
+        f"Model: {result['model']}\nResponse: {result['response'][:2400]}"
         for result in stage1_results
     ])
 
     stage2_text = "\n\n".join([
-        f"Model: {result['model']}\nRanking: {result['ranking']}"
+        f"Model: {result['model']}\nRanking: {result['ranking'][:1200]}"
         for result in stage2_results
     ])
 
@@ -195,9 +215,9 @@ Provide a clear, well-reasoned final answer that represents the council's collec
 
     # Query the chairman model
     candidates = list(dict.fromkeys([chairman_model or CHAIRMAN_MODEL or stage1_results[0]["model"]]
-                                    + [item["model"] for item in stage1_results]))
+                                    + [item["model"] for item in stage1_results]))[:3]
     for model in candidates:
-        response = await query_model(model, messages)
+        response = await query_model(model, messages, max_tokens=2200)
         if response and response.get("content"):
             return {"model": model, "response": response["content"], "degraded": model != candidates[0]}
 
@@ -338,8 +358,9 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
     # Prepare metadata
     metadata = {
         "configured_models": models,
+        "reviewer_models": select_reviewers(stage1_results) if len(stage1_results) >= 2 else [],
         "stage1_failed_models": [model for model in models if model not in {item["model"] for item in stage1_results}],
-        "stage2_failed_models": [item["model"] for item in stage1_results if item["model"] not in {rank["model"] for rank in stage2_results}],
+        "stage2_failed_models": [model for model in (select_reviewers(stage1_results) if len(stage1_results) >= 2 else []) if model not in {rank["model"] for rank in stage2_results}],
         "label_to_model": label_to_model,
         "aggregate_rankings": aggregate_rankings
     }

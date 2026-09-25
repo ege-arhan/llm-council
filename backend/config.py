@@ -13,6 +13,8 @@ LLM_API_URL = f"{LLM_API_BASE_URL}/chat/completions"
 # When set, read the member list from 9Router before every council run. This
 # keeps the council in sync with edits made in the 9Router dashboard.
 COUNCIL_COMBO = os.getenv("COUNCIL_COMBO", "").strip()
+COUNCIL_EXCLUDE_MODELS = [model.strip() for model in os.getenv("COUNCIL_EXCLUDE_MODELS", "").split(",") if model.strip()]
+COUNCIL_MAX_REVIEWERS = max(2, int(os.getenv("COUNCIL_MAX_REVIEWERS", "6")))
 NINEROUTER_BASE_URL = (os.getenv("NINEROUTER_BASE_URL") or LLM_API_BASE_URL.removesuffix("/v1")).rstrip("/")
 
 # Council members - list of OpenRouter model identifiers

@@ -2,7 +2,7 @@
 
 ## Ege's 9Router edition
 
-This fork keeps the original three-stage council and adds a 9Router mode for daily use. Set `COUNCIL_COMBO=llm-council` and the backend reads that combo's current members from 9Router before **every** run. It calls each member by its own model ID for independent answers and peer reviews; it never sends the whole council as one `llm-council` completion. A chairman then synthesizes the result. An unavailable member is listed in the run metadata, and a failed chairman produces an explicitly marked degraded answer.
+This fork keeps the original three-stage council and adds a 9Router mode for daily use. Set `COUNCIL_COMBO=llm-council` and the backend reads that combo's current members from 9Router before **every** run. Every eligible member answers independently. Up to six provider-diverse members then review the anonymized answers; this preserves multiple competing critiques while avoiding an expensive all-to-all review round. The designated chairman sees the answers and critiques and synthesizes the final response. The chairman is automatically removed from the debate panel, so it remains an independent final judge. Failed participants are listed in metadata and fallback synthesis is explicitly marked degraded.
 
 ```sh
 cp .env.example .env
@@ -14,7 +14,7 @@ cd frontend && npm ci && cd ..
 
 The web app runs on `http://localhost:5173`; the API binds to `127.0.0.1:8001`. `GET /api/council/models` shows the live member list. `POST /api/council/ask` accepts `{"content":"question"}` and returns the three stages without creating a chat, so a local personal agent such as AI-Ege can call the full council. Conversation files remain in ignored `data/conversations/` with private file permissions. The API is intended for the local machine or an authenticated private tunnel; do not expose it directly to the public internet.
 
-The roster comes from 9Router's local `GET /api/combos` management endpoint. If that endpoint is unavailable, the combo is missing, or fewer than two members are enabled, the run stops with a clear error. `COUNCIL_CHAIRMAN_MODEL` optionally chooses the judge; when blank, the first combo member is used. To keep using the original OpenRouter mode, leave `COUNCIL_COMBO` unset and configure `OPENROUTER_API_KEY` and optional `COUNCIL_MODELS`.
+The roster comes from 9Router's local `GET /api/combos` management endpoint. If that endpoint is unavailable, the combo is missing, or fewer than two eligible members are enabled, the run stops with a clear error. `COUNCIL_CHAIRMAN_MODEL` chooses the judge; for AI-Ege set it to `cx/gpt-6-astra`. `COUNCIL_EXCLUDE_MODELS` removes models that must not receive personal prompts. `COUNCIL_MAX_REVIEWERS` defaults to 6. Stage outputs have separate token budgets (900/650/2200), and each review and synthesis prompt receives bounded excerpts while complete stage responses remain in the run output. To keep using the original OpenRouter mode, leave `COUNCIL_COMBO` unset and configure `OPENROUTER_API_KEY` and optional `COUNCIL_MODELS`.
 
 For continued development, see [AGENTS.md](AGENTS.md) and [ROADMAP.md](ROADMAP.md). CI verifies backend tests, frontend tests, lint, build, and dependency audit without live API keys.
 

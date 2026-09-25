@@ -39,15 +39,27 @@ class ComboTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "bulunamadı"):
                 await models.resolve_council_models()
 
+    async def test_chairman_and_private_exclusions_are_not_debaters(self):
+        original_client = httpx.AsyncClient
+        def make_client(*args, **kwargs):
+            return original_client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+                "combos": [{"name": "llm-council", "models": ["ag/gemini", "meta/contributor", "gh/claude", "cx/gpt-6-astra"]}]
+            })))
+        with patch.object(models.config, "COUNCIL_COMBO", "llm-council"), \
+             patch.object(models.config, "CHAIRMAN_MODEL", "cx/gpt-6-astra"), \
+             patch.object(models.config, "COUNCIL_EXCLUDE_MODELS", ["meta/contributor"]), \
+             patch.object(models.httpx, "AsyncClient", side_effect=make_client):
+            self.assertEqual(await models.resolve_council_models(), ["ag/gemini", "gh/claude"])
+
     async def test_all_members_answer_and_review_independently(self):
         roster = ["ag/gemini", "nvidia/deepseek", "gh/claude"]
         calls = []
 
-        async def parallel(member_models, messages):
+        async def parallel(member_models, messages, **kwargs):
             calls.append(list(member_models))
             return {model: {"content": f"{model} answer"} for model in member_models}
 
-        async def judge(model, messages):
+        async def judge(model, messages, **kwargs):
             return {"content": "Final synthesis"}
 
         with patch.object(council, "resolve_council_models", AsyncMock(return_value=roster)), \
@@ -64,7 +76,7 @@ class ComboTests(unittest.IsolatedAsyncioTestCase):
         roster = ["ag/gemini", "nvidia/deepseek"]
         calls = []
 
-        async def parallel(member_models, messages):
+        async def parallel(member_models, messages, **kwargs):
             calls.append(list(member_models))
             return {model: {"content": "answer"} if model == "ag/gemini" else None for model in member_models}
 
@@ -78,7 +90,7 @@ class ComboTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_chairman_uses_another_successful_member(self):
         answers = [{"model": "ag/gemini", "response": "A"}, {"model": "gh/claude", "response": "B"}]
-        async def query(model, messages):
+        async def query(model, messages, **kwargs):
             return None if model == "ag/gemini" else {"content": "Synthesis from Claude"}
         with patch.object(council, "query_model", side_effect=query):
             final = await council.stage3_synthesize_final("Question", answers, [], "ag/gemini")
@@ -98,6 +110,13 @@ class ComboTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(council.response_label(26), "AA")
         self.assertEqual(council.parse_ranking_from_text("FINAL RANKING:\n1. Response AA\n2. Response B"),
                          ["Response AA", "Response B"])
+
+    def test_reviewer_panel_is_bounded_and_provider_diverse(self):
+        answers = [{"model": model, "response": "x"} for model in [
+            "ag/one", "ag/two", "cx/one", "cx/two", "gh/one", "oc/one", "ocg/one", "nvidia/one", "nvidia/two"
+        ]]
+        self.assertEqual(council.select_reviewers(answers),
+                         ["ag/one", "cx/one", "gh/one", "oc/one", "ocg/one", "nvidia/one"])
 
 
 class StorageTests(unittest.TestCase):

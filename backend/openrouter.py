@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 async def query_model(
     model: str,
     messages: List[Dict[str, str]],
-    timeout: float = 120.0
+    timeout: float = 120.0,
+    max_tokens: int = 900,
 ) -> Optional[Dict[str, Any]]:
     """
     Query a single model via OpenRouter API.
@@ -35,6 +36,7 @@ async def query_model(
     payload = {
         "model": model,
         "messages": messages,
+        "max_tokens": max_tokens,
     }
 
     try:
@@ -53,7 +55,7 @@ async def query_model(
                 if not isinstance(content, str) or not content.strip():
                     logger.warning("Model %s returned empty content", model)
                     return None
-                return {"content": content.strip(), "reasoning_details": message.get("reasoning_details"),
+                return {"content": content.strip()[:8000], "reasoning_details": message.get("reasoning_details"),
                         "usage": data.get("usage")}
     except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
         logger.warning("Model %s failed: %s", model, type(exc).__name__)
@@ -62,7 +64,8 @@ async def query_model(
 
 async def query_models_parallel(
     models: List[str],
-    messages: List[Dict[str, str]]
+    messages: List[Dict[str, str]],
+    max_tokens: int = 900,
 ) -> Dict[str, Optional[Dict[str, Any]]]:
     """
     Query multiple models in parallel.
@@ -77,7 +80,7 @@ async def query_models_parallel(
     import asyncio
 
     # Create tasks for all models
-    tasks = [query_model(model, messages) for model in models]
+    tasks = [query_model(model, messages, max_tokens=max_tokens) for model in models]
 
     # Wait for all to complete
     responses = await asyncio.gather(*tasks)

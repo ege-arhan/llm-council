@@ -50,6 +50,7 @@ async def resolve_council_models() -> list[str]:
         if model not in models:
             models.append(model)
 
+    models = [model for model in models if model not in config.COUNCIL_EXCLUDE_MODELS and model != config.CHAIRMAN_MODEL]
     if len(models) < 2:
         raise RuntimeError("Council için comboda en az iki etkin üye model gerekli.")
     return models
