@@ -55,7 +55,7 @@ async def query_model(
                 if not isinstance(content, str) or not content.strip():
                     logger.warning("Model %s returned empty content", model)
                     return None
-                return {"content": content.strip()[:8000], "reasoning_details": message.get("reasoning_details"),
+                return {"content": content.strip(), "reasoning_details": message.get("reasoning_details"),
                         "usage": data.get("usage")}
     except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
         logger.warning("Model %s failed: %s", model, type(exc).__name__)

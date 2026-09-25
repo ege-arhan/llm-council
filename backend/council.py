@@ -56,6 +56,13 @@ def select_reviewers(stage1_results: List[Dict[str, Any]]) -> List[str]:
     return selected
 
 
+def bounded_excerpt(text: str, limit: int) -> str:
+    """Keep beginning and conclusion so bounded prompts do not lose the answer."""
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit * 2 // 3]}\n[...middle omitted; full answer retained in run...]\n{text[-limit // 3:]}"
+
+
 async def stage1_collect_responses(user_query: str, models: List[str] | None = None) -> List[Dict[str, Any]]:
     """
     Stage 1: Collect individual responses from all council models.
@@ -111,7 +118,7 @@ async def stage2_collect_rankings(
 
     # Build the ranking prompt
     responses_text = "\n\n".join([
-        f"Response {label}:\n{result['response'][:1600]}"
+        f"Response {label}:\n{bounded_excerpt(result['response'], 1600)}"
         for label, result in zip(labels, stage1_results)
     ])
 
@@ -185,12 +192,12 @@ async def stage3_synthesize_final(
     """
     # Build comprehensive context for chairman
     stage1_text = "\n\n".join([
-        f"Model: {result['model']}\nResponse: {result['response'][:2400]}"
+        f"Model: {result['model']}\nResponse: {bounded_excerpt(result['response'], 2400)}"
         for result in stage1_results
     ])
 
     stage2_text = "\n\n".join([
-        f"Model: {result['model']}\nRanking: {result['ranking'][:1200]}"
+        f"Model: {result['model']}\nRanking: {bounded_excerpt(result['ranking'], 1200)}"
         for result in stage2_results
     ])
 
