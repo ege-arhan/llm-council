@@ -126,6 +126,18 @@ class ComboTests(unittest.IsolatedAsyncioTestCase):
              patch.object(council, "COUNCIL_REVIEWER_PRIORITY", ["ag/strong", "cx/strong", "ocg/strong", "nvidia/strong"]):
             self.assertEqual(council.select_reviewers(answers), ["ag/strong", "cx/strong", "ocg/strong", "nvidia/strong"])
 
+    async def test_failed_reviewer_uses_bounded_backup(self):
+        answers = [{"model": model, "response": "An answer"} for model in ["ag/strong", "cx/strong", "ag/backup"]]
+        async def initial(models, messages, **kwargs):
+            return {"ag/strong": {"content": "FINAL RANKING:\n1. Response A\n2. Response B\n3. Response C"}, "cx/strong": None}
+        with patch.object(council, "COUNCIL_MAX_REVIEWERS", 2), \
+             patch.object(council, "COUNCIL_REVIEWER_PRIORITY", ["ag/strong", "cx/strong", "ag/backup"]), \
+             patch.object(council, "query_models_parallel", side_effect=initial), \
+             patch.object(council, "query_model", AsyncMock(return_value={"content": "FINAL RANKING:\n1. Response B\n2. Response C\n3. Response A"})):
+            reviews, _, attempted = await council.stage2_collect_rankings("Question", answers)
+        self.assertEqual([item["model"] for item in reviews], ["ag/strong", "ag/backup"])
+        self.assertEqual(attempted, ["ag/strong", "cx/strong", "ag/backup"])
+
 
 class StorageTests(unittest.TestCase):
     def test_private_atomic_storage_and_path_validation(self):

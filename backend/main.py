@@ -187,7 +187,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
 
             # Stage 2: Collect rankings
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
-            stage2_results, label_to_model = await stage2_collect_rankings(council_question, stage1_results)
+            stage2_results, label_to_model, reviewer_attempts = await stage2_collect_rankings(council_question, stage1_results)
             aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
             yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
 
@@ -210,8 +210,9 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 stage2_results,
                 stage3_result,
                 {"configured_models": models,
+                 "reviewer_models": reviewer_attempts,
                  "stage1_failed_models": [model for model in models if model not in {item["model"] for item in stage1_results}],
-                 "stage2_failed_models": [item["model"] for item in stage1_results if item["model"] not in {rank["model"] for rank in stage2_results}],
+                 "stage2_failed_models": [model for model in reviewer_attempts if model not in {rank["model"] for rank in stage2_results}],
                  "label_to_model": label_to_model,
                  "aggregate_rankings": aggregate_rankings},
             )

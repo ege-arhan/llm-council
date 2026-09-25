@@ -35,8 +35,9 @@ def response_label(index: int) -> str:
         index -= 1
 
 
-def select_reviewers(stage1_results: List[Dict[str, Any]]) -> List[str]:
+def select_reviewers(stage1_results: List[Dict[str, Any]], limit: int | None = None) -> List[str]:
     """Review with a bounded, provider-diverse panel after every member answers."""
+    limit = COUNCIL_MAX_REVIEWERS if limit is None else limit
     selected = []
     families = set()
     available = {item["model"] for item in stage1_results}
@@ -44,7 +45,7 @@ def select_reviewers(stage1_results: List[Dict[str, Any]]) -> List[str]:
         if model in available and model not in selected:
             selected.append(model)
             families.add(model.split("/", 1)[0])
-            if len(selected) >= COUNCIL_MAX_REVIEWERS:
+            if len(selected) >= limit:
                 return selected
     for item in stage1_results:
         model = item["model"]
@@ -52,13 +53,13 @@ def select_reviewers(stage1_results: List[Dict[str, Any]]) -> List[str]:
         if family not in families:
             selected.append(model)
             families.add(family)
-            if len(selected) >= COUNCIL_MAX_REVIEWERS:
+            if len(selected) >= limit:
                 return selected
     for item in stage1_results:
         model = item["model"]
         if model not in selected:
             selected.append(model)
-            if len(selected) >= COUNCIL_MAX_REVIEWERS:
+            if len(selected) >= limit:
                 break
     return selected
 
@@ -100,7 +101,7 @@ async def stage1_collect_responses(user_query: str, models: List[str] | None = N
 async def stage2_collect_rankings(
     user_query: str,
     stage1_results: List[Dict[str, Any]]
-) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+) -> Tuple[List[Dict[str, Any]], Dict[str, str], List[str]]:
     """
     Stage 2: Each model ranks the anonymized responses.
 
@@ -121,7 +122,7 @@ async def stage2_collect_rankings(
     }
 
     if len(stage1_results) < 2:
-        return [], label_to_model
+        return [], label_to_model, []
 
     # Build the ranking prompt
     responses_text = "\n\n".join([
@@ -164,6 +165,15 @@ Now provide your evaluation and ranking:"""
 
     # The full roster answers independently; a bounded, diverse subset reviews.
     responses = await query_models_parallel(select_reviewers(stage1_results), messages, max_tokens=650)
+    target = min(COUNCIL_MAX_REVIEWERS, len(stage1_results))
+    fallback_attempts = 0
+    for model in select_reviewers(stage1_results, limit=len(stage1_results)):
+        if sum(answer is not None for answer in responses.values()) >= target or fallback_attempts >= 2:
+            break
+        if model in responses:
+            continue
+        responses[model] = await query_model(model, messages, max_tokens=650)
+        fallback_attempts += 1
 
     # Format results
     stage2_results = []
@@ -177,7 +187,7 @@ Now provide your evaluation and ranking:"""
                 "parsed_ranking": parsed
             })
 
-    return stage2_results, label_to_model
+    return stage2_results, label_to_model, list(responses)
 
 
 async def stage3_synthesize_final(
@@ -355,7 +365,7 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
         raise RuntimeError("Tüm Council modelleri başarısız oldu; yanıt üretilmedi.")
 
     # Stage 2: Collect rankings
-    stage2_results, label_to_model = await stage2_collect_rankings(user_query, stage1_results)
+    stage2_results, label_to_model, reviewer_attempts = await stage2_collect_rankings(user_query, stage1_results)
 
     # Calculate aggregate rankings
     aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
@@ -372,9 +382,9 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
     # Prepare metadata
     metadata = {
         "configured_models": models,
-        "reviewer_models": select_reviewers(stage1_results) if len(stage1_results) >= 2 else [],
+        "reviewer_models": reviewer_attempts,
         "stage1_failed_models": [model for model in models if model not in {item["model"] for item in stage1_results}],
-        "stage2_failed_models": [model for model in (select_reviewers(stage1_results) if len(stage1_results) >= 2 else []) if model not in {rank["model"] for rank in stage2_results}],
+        "stage2_failed_models": [model for model in reviewer_attempts if model not in {rank["model"] for rank in stage2_results}],
         "label_to_model": label_to_model,
         "aggregate_rankings": aggregate_rankings
     }
