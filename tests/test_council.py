@@ -25,6 +25,7 @@ class ComboTests(unittest.IsolatedAsyncioTestCase):
             return original_client(transport=httpx.MockTransport(reply))
 
         with patch.object(models.config, "COUNCIL_COMBO", "llm-council"), \
+             patch.object(models.config, "CHAIRMAN_MODEL", ""), \
              patch.object(models.config, "NINEROUTER_BASE_URL", "http://127.0.0.1:20128"), \
              patch.object(models.httpx, "AsyncClient", side_effect=make_client):
             self.assertEqual(await models.resolve_council_models(), ["ag/gemini", "nvidia/deepseek"])
@@ -48,6 +49,7 @@ class ComboTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(models.config, "COUNCIL_COMBO", "llm-council"), \
              patch.object(models.config, "CHAIRMAN_MODEL", "cx/gpt-6-astra"), \
              patch.object(models.config, "COUNCIL_EXCLUDE_MODELS", ["meta/contributor"]), \
+             patch.object(models.config, "COUNCIL_EXCLUDE_PATTERNS", ["contributor"]), \
              patch.object(models.httpx, "AsyncClient", side_effect=make_client):
             self.assertEqual(await models.resolve_council_models(), ["ag/gemini", "gh/claude"])
 

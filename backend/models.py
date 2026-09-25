@@ -50,7 +50,11 @@ async def resolve_council_models() -> list[str]:
         if model not in models:
             models.append(model)
 
-    models = [model for model in models if model not in config.COUNCIL_EXCLUDE_MODELS and model != config.CHAIRMAN_MODEL]
+    if config.CHAIRMAN_MODEL and config.CHAIRMAN_MODEL not in models:
+        raise RuntimeError(f"Hakem modeli {config.CHAIRMAN_MODEL} Council kombosunda bulunamadı.")
+    models = [model for model in models if model not in config.COUNCIL_EXCLUDE_MODELS
+              and not any(part in model.lower() for part in config.COUNCIL_EXCLUDE_PATTERNS)
+              and model != config.CHAIRMAN_MODEL]
     if len(models) < 2:
         raise RuntimeError("Council için comboda en az iki etkin üye model gerekli.")
     return models

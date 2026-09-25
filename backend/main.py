@@ -11,7 +11,7 @@ import asyncio
 
 from . import storage
 from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings, contextualize_query, mark_partial_council
-from .config import CHAIRMAN_MODEL, COUNCIL_EXCLUDE_MODELS
+from .config import CHAIRMAN_MODEL, COUNCIL_EXCLUDE_MODELS, COUNCIL_EXCLUDE_PATTERNS
 from .models import resolve_council_models
 
 app = FastAPI(title="LLM Council API")
@@ -65,7 +65,8 @@ async def council_models():
         models = await resolve_council_models()
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return {"models": models, "chairman": CHAIRMAN_MODEL or models[0], "excluded_models": COUNCIL_EXCLUDE_MODELS}
+    return {"models": models, "chairman": CHAIRMAN_MODEL or models[0], "excluded_models": COUNCIL_EXCLUDE_MODELS,
+            "excluded_patterns": COUNCIL_EXCLUDE_PATTERNS}
 
 
 @app.post("/api/council/ask")
