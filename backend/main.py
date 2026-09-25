@@ -10,7 +10,7 @@ import json
 import asyncio
 
 from . import storage
-from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings, contextualize_query, mark_partial_council
+from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings, contextualize_query, mark_partial_council, summarize_usage
 from .config import CHAIRMAN_MODEL, COUNCIL_EXCLUDE_MODELS, COUNCIL_EXCLUDE_PATTERNS
 from .models import resolve_council_models
 
@@ -214,7 +214,8 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                  "stage1_failed_models": [model for model in models if model not in {item["model"] for item in stage1_results}],
                  "stage2_failed_models": [model for model in reviewer_attempts if model not in {rank["model"] for rank in stage2_results}],
                  "label_to_model": label_to_model,
-                 "aggregate_rankings": aggregate_rankings},
+                 "aggregate_rankings": aggregate_rankings,
+                 "reported_usage": summarize_usage(stage1_results, stage2_results, stage3_result)},
             )
 
             # Send completion event

@@ -138,6 +138,15 @@ class ComboTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item["model"] for item in reviews], ["ag/strong", "ag/backup"])
         self.assertEqual(attempted, ["ag/strong", "cx/strong", "ag/backup"])
 
+    def test_usage_summary_counts_only_reported_tokens(self):
+        summary = council.summarize_usage(
+            [{"usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}}, {"usage": None}],
+            [{"usage": {"input_tokens": 8, "output_tokens": 3}}],
+            {"usage": None},
+        )
+        self.assertEqual(summary, {"calls_total": 4, "calls_with_usage": 2,
+                                   "prompt_tokens": 18, "completion_tokens": 7, "total_tokens": 25})
+
 
 class StorageTests(unittest.TestCase):
     def test_private_atomic_storage_and_path_validation(self):

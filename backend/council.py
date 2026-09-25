@@ -92,7 +92,8 @@ async def stage1_collect_responses(user_query: str, models: List[str] | None = N
         if response is not None:  # Only include successful responses
             stage1_results.append({
                 "model": model,
-                "response": response.get('content', '')
+                "response": response.get('content', ''),
+                "usage": response.get("usage"),
             })
 
     return stage1_results
@@ -184,7 +185,8 @@ Now provide your evaluation and ranking:"""
             stage2_results.append({
                 "model": model,
                 "ranking": full_text,
-                "parsed_ranking": parsed
+                "parsed_ranking": parsed,
+                "usage": response.get("usage"),
             })
 
     return stage2_results, label_to_model, list(responses)
@@ -243,7 +245,8 @@ Provide a clear, well-reasoned final answer that represents the council's collec
     for model in candidates:
         response = await query_model(model, messages, max_tokens=2200)
         if response and response.get("content"):
-            return {"model": model, "response": response["content"], "degraded": model != candidates[0]}
+            return {"model": model, "response": response["content"], "degraded": model != candidates[0],
+                    "usage": response.get("usage")}
 
     # Preserve a real answer when every synthesis attempt fails; label it clearly.
     return {"model": stage1_results[0]["model"], "response": stage1_results[0]["response"],
@@ -331,6 +334,29 @@ def calculate_aggregate_rankings(
     return aggregate
 
 
+def summarize_usage(*stages: List[Dict[str, Any]] | Dict[str, Any]) -> Dict[str, int]:
+    """Sum only provider-reported usage; unknown usage is never estimated."""
+    calls = [item for stage in stages for item in (stage if isinstance(stage, list) else [stage])]
+    summary = {"calls_total": len(calls), "calls_with_usage": 0,
+               "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    for item in calls:
+        usage = item.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        prompt = usage.get("prompt_tokens", usage.get("input_tokens", 0))
+        completion = usage.get("completion_tokens", usage.get("output_tokens", 0))
+        total = usage.get("total_tokens")
+        if not isinstance(prompt, (int, float)) or not isinstance(completion, (int, float)):
+            continue
+        if not isinstance(total, (int, float)):
+            total = prompt + completion
+        summary["calls_with_usage"] += 1
+        summary["prompt_tokens"] += int(prompt)
+        summary["completion_tokens"] += int(completion)
+        summary["total_tokens"] += int(total)
+    return summary
+
+
 async def generate_conversation_title(user_query: str) -> str:
     """
     Generate a short title for a conversation based on the first user message.
@@ -386,7 +412,8 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
         "stage1_failed_models": [model for model in models if model not in {item["model"] for item in stage1_results}],
         "stage2_failed_models": [model for model in reviewer_attempts if model not in {rank["model"] for rank in stage2_results}],
         "label_to_model": label_to_model,
-        "aggregate_rankings": aggregate_rankings
+        "aggregate_rankings": aggregate_rankings,
+        "reported_usage": summarize_usage(stage1_results, stage2_results, stage3_result),
     }
 
     return stage1_results, stage2_results, stage3_result, metadata
